@@ -3,11 +3,17 @@
 A byte-level BPE tokenizer and (soon) a transformer language model, built
 from scratch in PyTorch as a self-study project on language-model internals.
 
+The [`wiki/`](wiki/README.md) collects notes on the math and concepts that
+the code implements — float layouts, FLOPs, autograd, attention, RoPE,
+training memory, etc.
+
 ## Layout
 
 ```
 .
-├── tokenizer/        byte-level BPE — see tokenizer/README.md
+├── src/
+│   └── tokenizer/    byte-level BPE — see src/tokenizer/README.md
+├── wiki/             notes on LM internals — see wiki/README.md
 └── data/             corpora and trained artifacts (gitignored)
     ├── corpus/           raw source text
     └── tokenizer/        trained vocab / merges pickles
