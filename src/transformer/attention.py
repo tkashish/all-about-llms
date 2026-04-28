@@ -6,14 +6,17 @@ from torch import nn
 
 
 class Attention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int):
+    def __init__(self, d_model: int, num_heads: int, max_seq_len: int):
         super().__init__()
         self.q_out = nn.Parameter(torch.randn(d_model, d_model)/math.sqrt(d_model))
         self.k_out = nn.Parameter(torch.randn(d_model, d_model)/math.sqrt(d_model))
         self.v_out = nn.Parameter(torch.randn(d_model, d_model)/math.sqrt(d_model))
-        self.w_out = nn.Parameter(torch.randn(d_model, d_model)/math.sqrt(d_model))
+        self.w_out = nn.Parameter(torch.randn(max_seq_len, max_seq_len)/math.sqrt(d_model))
         self.d_model = d_model
         self.num_heads = num_heads
+        self.d_head = d_model // num_heads
+        causal_mask = torch.triu(torch.ones(max_seq_len, max_seq_len, dtype=torch.bool), diagonal=1)
+        self.register_buffer("causal_mask", causal_mask)
 
     def rearrange_for_multi_head(self, tsr: torch.Tensor ):
         tsr = einops.rearrange(tsr, "b t (h d) -> b t h d", h = self.num_heads)
@@ -37,9 +40,10 @@ class Attention(nn.Module):
         k_t = einops.rearrange(k, "b h t d -> b h d t")
         score = einops.einsum(q, k_t, "b h t_q d, b h d t_k -> b h t_q t_k")
         # scaling by the size of d_head i.e. d_model / number_of_heads
-        scaled_score = score / math.sqrt(self.d_model/self.num_heads)
+        scaled_score = score / math.sqrt(self.d_head)
+        token_len = x.shape[-2]
+        scaled_score = scaled_score.masked_fill(self.causal_mask[:token_len, :token_len], float("-inf"))
         weights = torch.softmax(scaled_score, dim=-1)
-
         """
         merging back the weights for each head
         """
