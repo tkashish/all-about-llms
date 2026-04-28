@@ -18,8 +18,9 @@ class Transformer(nn.Module):
         super().__init__()
         self.attention = Attention(params.d_model, params.num_heads, params.max_seq_len)
         self.mlp = MLP(params.d_model, params.d_ff)
+        self.rms_norm = nn.RMSNorm(params.d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.attention(x)
-        x = self.mlp(x)
+        x = x + self.attention(self.rms_norm(x))
+        x = x + self.mlp(self.rms_norm(x))
         return x
