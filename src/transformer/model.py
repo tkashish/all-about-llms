@@ -29,7 +29,6 @@ class Model(nn.Module):
         )) for _ in range(params.num_transformer_blocks)])
         self.rms_norm = nn.RMSNorm(params.d_model)
 
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.embeddings_table(x)
         for transformer in self.transformers:
@@ -40,7 +39,7 @@ class Model(nn.Module):
 
 if __name__ == '__main__':
     params = HyperParams(
-        d_model=10,
+        d_model=20,
         vocab_size=1000,
         num_heads = 2,
         max_seq_len=10,
@@ -54,3 +53,4 @@ if __name__ == '__main__':
     out = model(input)
     print(f"Input Shape: {input.shape}")
     print(f"Output Shape: {out.shape}")
+    print(out)

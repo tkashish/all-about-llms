@@ -4,6 +4,8 @@ import einops
 import torch
 from torch import nn
 
+from transformer.rope import RoPE
+
 
 class Attention(nn.Module):
     def __init__(self, d_model: int, num_heads: int, max_seq_len: int):
@@ -11,12 +13,13 @@ class Attention(nn.Module):
         self.q_out = nn.Parameter(torch.randn(d_model, d_model)/math.sqrt(d_model))
         self.k_out = nn.Parameter(torch.randn(d_model, d_model)/math.sqrt(d_model))
         self.v_out = nn.Parameter(torch.randn(d_model, d_model)/math.sqrt(d_model))
-        self.w_out = nn.Parameter(torch.randn(max_seq_len, max_seq_len)/math.sqrt(d_model))
+        self.w_out = nn.Parameter(torch.randn(d_model, d_model)/math.sqrt(d_model))
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_head = d_model // num_heads
         causal_mask = torch.triu(torch.ones(max_seq_len, max_seq_len, dtype=torch.bool), diagonal=1)
         self.register_buffer("causal_mask", causal_mask)
+        self.rope = RoPE(d_head=self.d_head, max_seq_len=max_seq_len)
 
     def rearrange_for_multi_head(self, tsr: torch.Tensor ):
         tsr = einops.rearrange(tsr, "b t (h d) -> b t h d", h = self.num_heads)
@@ -34,8 +37,8 @@ class Attention(nn.Module):
         We are going to calculate the weights for each head and then merge all heads 
         for calculating the final vector to be multipled with value tensor
         """
-        q = self.rearrange_for_multi_head(q)
-        k = self.rearrange_for_multi_head(k)
+        q = self.rope(self.rearrange_for_multi_head(q))
+        k = self.rope(self.rearrange_for_multi_head(k))
         v = self.rearrange_for_multi_head(v)
         k_t = einops.rearrange(k, "b h t d -> b h d t")
         score = einops.einsum(q, k_t, "b h t_q d, b h d t_k -> b h t_q t_k")
