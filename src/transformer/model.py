@@ -37,20 +37,19 @@ class Model(nn.Module):
         logits = einops.einsum(x, self.embeddings_table.table.T, "b t d, d t_all -> b t t_all")
         return logits
 
-if __name__ == '__main__':
-    params = HyperParams(
-        d_model=20,
-        vocab_size=1000,
-        num_heads = 2,
-        max_seq_len=10,
-        d_ff=40,
-        num_transformer_blocks=10
-    )
-    model = Model(params)
-    model.to("mps")
-    input = torch.arange(0,12).reshape(4,3)
-    input.to("mps")
-    out = model(input)
-    print(f"Input Shape: {input.shape}")
-    print(f"Output Shape: {out.shape}")
-    print(out)
+# if __name__ == '__main__':
+#     params = HyperParams(
+#         d_model=20,
+#         vocab_size=1000,
+#         num_heads = 2,
+#         max_seq_len=10,
+#         d_ff=40,
+#         num_transformer_blocks=10
+#     )
+#     model = Model(params)
+#     model.to("mps")
+#     input = torch.arange(0,12).reshape(4,3)
+#     input.to("mps")
+#     out = model(input)
+#     print(f"Input Shape: {input.shape}")
+#     print(f"Output Shape: {out.shape}")
