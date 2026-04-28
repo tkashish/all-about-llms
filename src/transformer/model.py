@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from transformer.embedding_table import EmbeddingTable
-from transformer.transformer import Transformer
+from transformer.transformer import Transformer, TransformerHyperParams
 
 
 @dataclass
@@ -13,12 +13,18 @@ class HyperParams:
     vocab_size: int
     num_heads: int
     max_seq_len: int
+    d_ff: int
 
 class Model(nn.Module):
     def __init__(self, params: HyperParams):
         super().__init__()
         self.embeddings_table = EmbeddingTable(params.d_model, params.vocab_size)
-        self.transformer = Transformer(params.d_model, params.num_heads, params.max_seq_len)
+        self.transformer = Transformer(TransformerHyperParams(
+            d_model=params.d_model,
+            num_heads =params.num_heads,
+            max_seq_len=params.max_seq_len,
+            d_ff=params.d_ff
+        ))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.embeddings_table(x)
@@ -27,11 +33,12 @@ class Model(nn.Module):
 
 
 if __name__ == '__main__':
-    params =HyperParams(
+    params = HyperParams(
         d_model=10,
         vocab_size=1000,
         num_heads = 2,
-        max_seq_len=10
+        max_seq_len=10,
+        d_ff=40
     )
     model = Model(params)
     model.to("mps")
