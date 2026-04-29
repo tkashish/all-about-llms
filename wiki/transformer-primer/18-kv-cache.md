@@ -470,6 +470,93 @@ the right target.
 Then compare decode speed against the naive re-run-forward approach —
 you should see 5-10× speedup on typical generation lengths.
 
+## Verifying correctness — a must-do
+
+A KV cache implementation can look like it works (reasonable speedup,
+plausible-looking output) while silently computing wrong math. The
+bug signature: "model generates text, but it's different from what
+the model without the cache would have generated."
+
+The correctness test is simple — but you need to set it up right.
+
+### The protocol
+
+1. **Use argmax sampling, not temperature.** Argmax is deterministic.
+   If two code paths compute the same logits, they produce the same
+   token stream. Any divergence proves a bug.
+2. **Run two generation paths on the same prompt:**
+   - Naive path (no cache): re-run forward on the growing sequence
+     each step.
+   - Cache path: prefill once, decode one token at a time using cache.
+3. **Compare the generated token IDs token-by-token.** If they differ
+   at any step, the cache is wrong. Report the first divergence.
+
+```python
+tokens_no_cache = generate_no_cache(...)
+tokens_with_cache = generate_with_cache(...)
+
+assert torch.equal(tokens_no_cache, tokens_with_cache)
+```
+
+### Why argmax, not temperature
+
+Temperature + multinomial sampling hides bugs. Two paths with
+slightly different logits will produce different tokens via RNG and
+you'd just say "random variation." Argmax flips the output on any
+real logit difference, exposing the bug.
+
+After the cache is verified correct, switch back to temperature
+sampling for actual generation.
+
+### Common bugs this test catches
+
+- **Off-by-one in cache indexing.** Writing to slot `pos+1` instead
+  of `pos` (or vice versa). Cache gets corrupted, logits wrong.
+- **RoPE applied with wrong position.** Passing `pos=0` during
+  prefill rotates all tokens by the same zero angle, instead of
+  per-position angles. Produces wrong K and Q.
+- **Broadcasting bug on cache write.** `K_cache[:, :, :pos+1, :] =
+  K_new` where `K_new` has T=1 will broadcast and overwrite all
+  slots 0..pos with the new token's K, corrupting history.
+- **Cache not being read back correctly.** Attention math uses the
+  just-computed K, not the cached K, which misses earlier positions.
+- **Causal mask applied wrong during decode.** The mask is for prefill/
+  training (when Q and K have the same length). During decode, Q has
+  length 1 and K has length pos+1 — the mask shape doesn't match.
+
+### What a correct output looks like
+
+With argmax sampling, both paths should produce **byte-identical**
+token streams. Not "close" — identical. The cache optimization doesn't
+change the math, so there's no room for numerical precision to matter.
+
+If outputs match exactly, your cache is correct. Any mismatch, no
+matter how small, is a bug.
+
+### Diagnosing a mismatch
+
+When two paths diverge at step N:
+
+1. Print the top-1 logit at step N-1 from each path. If they differ,
+   the divergence started earlier. Back up.
+2. Print the K and V tensors at each layer going into attention. Find
+   the first layer / position where they differ. That's your bug.
+3. Print the output of attention itself. If inputs match but output
+   differs, the bug is in attention math — probably the mask or the
+   score shape.
+
+### What the benchmark should also measure
+
+Beyond "match / no-match":
+
+- **Per-step time.** With cache, should be roughly constant across
+  decode steps. Without cache, should grow linearly.
+- **Speedup.** For a trained model on reasonable lengths, expect 5-10×.
+  Smaller speedups on tiny models (overhead per step dominates).
+- **Prefill time vs decode time.** Both are useful separately — prefill
+  dominates for short generations from long prompts, decode dominates
+  for long generations from short prompts.
+
 ### Summary table
 
 | level | approach | decode speed | memory use | complexity |
