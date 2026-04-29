@@ -13,38 +13,35 @@ class CacheParams:
     device: str
 
 
-"""
-Shape of K and V: B H T D
-"""
-
-
 class KVCache:
     def __init__(self, params: CacheParams):
         self.num_attention_layers = params.num_attention_layers
         self.pos = 0
-        self.k = torch.ones(params.num_attention_layers,
+        self.k = torch.empty(params.num_attention_layers,
                             1,
                             params.num_heads,
                             params.max_seq_len,
-                            params.d_head, dtype=params.dtype)
-        self.v = torch.ones(params.num_attention_layers,
+                            params.d_head, dtype=params.dtype, device=params.device)
+        self.v = torch.empty(params.num_attention_layers,
                             1,
                             params.num_heads,
                             params.max_seq_len,
-                            params.d_head, dtype=params.dtype)
+                            params.d_head, dtype=params.dtype, device=params.device)
 
     def get(self, layer_id):
         return self.k[layer_id, :, :, :self.pos+1, :], self.v[layer_id, :, :, :self.pos+1, :]
 
     def add(self, layer_id: int, k: torch.Tensor, v: torch.Tensor):
-        self.pos = k.shape[-2] - 1
+        if layer_id == 0:
+            self.pos = k.shape[-2] - 1
         self.k[layer_id, :, :, :self.pos + 1, :].copy_(k)
         self.v[layer_id, :, :, :self.pos + 1, :].copy_(v)
 
     def append(self, layer_id: int, k: torch.Tensor, v: torch.Tensor):
-        self.pos += 1
-        self.k[layer_id, :, :, :self.pos + 1, :].copy_(k)
-        self.v[layer_id, :, :, :self.pos + 1, :].copy_(v)
+        if layer_id == 0:
+            self.pos += 1
+        self.k[layer_id, :, :, self.pos:self.pos+1, :].copy_(k)
+        self.v[layer_id, :, :, self.pos:self.pos+1, :].copy_(v)
 
 
 # if __name__ == '__main__':

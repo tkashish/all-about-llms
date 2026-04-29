@@ -65,7 +65,8 @@ if __name__ == '__main__':
         num_heads = num_heads,
         max_seq_len=max_seq_len,
         d_ff=d_ff,
-        num_transformer_blocks=num_blocks
+        num_transformer_blocks=num_blocks,
+        is_training=True
     ))
     model.to("mps")
     print(f"params: {sum(p.numel() for p in model.parameters()):,}")

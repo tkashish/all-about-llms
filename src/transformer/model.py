@@ -18,7 +18,7 @@ class HyperParams:
     max_seq_len: int
     d_ff: int
     num_transformer_blocks: int
-    is_training=True
+    is_training: bool
 
 class Model(nn.Module):
     def __init__(self, params: HyperParams):
@@ -40,14 +40,15 @@ class Model(nn.Module):
             max_seq_len=params.max_seq_len,
             d_ff=params.d_ff,
             layer_idx=i,
-            kv_cache=kv_cache
+            kv_cache=kv_cache,
+            is_training=params.is_training
         )) for i in range(params.num_transformer_blocks)])
         self.rms_norm = nn.RMSNorm(params.d_model)
 
-    def forward(self, x: torch.Tensor, pos: int, is_training=True) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, pos: int) -> torch.Tensor:
         x = self.embeddings_table(x)
         for transformer in self.transformers:
-            x = transformer(x, pos, is_training)
+            x = transformer(x, pos)
         x = self.rms_norm(x)
         logits = einops.einsum(x, self.embeddings_table.table.T, "b t d, d t_all -> b t t_all")
         return logits

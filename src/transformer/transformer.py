@@ -14,7 +14,7 @@ class Transformer(nn.Module):
         self.rms_norm1 = nn.RMSNorm(params.d_model)
         self.rms_norm2 = nn.RMSNorm(params.d_model)
 
-    def forward(self, x: torch.Tensor, pos: int, is_training=True) -> torch.Tensor:
-        x = x + self.attention(self.rms_norm1(x), pos, is_training)
+    def forward(self, x: torch.Tensor, pos: int) -> torch.Tensor:
+        x = x + self.attention(self.rms_norm1(x), pos)
         x = x + self.mlp(self.rms_norm2(x))
         return x

@@ -17,10 +17,12 @@ class AttentionParams:
     d_ff: int
     kv_cache: KVCache | None
     layer_idx: int
+    is_training: bool
 
 class Attention(nn.Module):
     def __init__(self, params: AttentionParams):
         super().__init__()
+        self.is_training = params.is_training
         self.q_out = nn.Parameter(torch.randn(params.d_model, params.d_model)/math.sqrt(params.d_model))
         self.k_out = nn.Parameter(torch.randn(params.d_model, params.d_model)/math.sqrt(params.d_model))
         self.v_out = nn.Parameter(torch.randn(params.d_model, params.d_model)/math.sqrt(params.d_model))
@@ -51,7 +53,7 @@ class Attention(nn.Module):
         2. From 2nd token onwards: We will have KV Cache populated and would only need to generate K V 
         for last token. K, V for previous tokens will be fetched from cache.
     """
-    def forward(self, x: torch.Tensor, pos: int, is_training=True) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, pos: int) -> torch.Tensor:
         q = einops.einsum(x, self.q_out, "b t d_in, d_in d_out -> b t d_out")
         q = self.rope(self.rearrange_for_multi_head(q), pos)
 
@@ -61,15 +63,14 @@ class Attention(nn.Module):
         v = einops.einsum(x, self.v_out, "b t d_in, d_in d_out -> b t d_out")
         v = self.rearrange_for_multi_head(v)
 
-        if not is_training:
+        if not self.is_training:
             """
                 KVCache is only used during inference
             """
-            if pos < 0:
-                assert self.kv_cache
+            assert self.kv_cache
+            if pos < 0: # prefill stage
                 self.kv_cache.add(self.layer_idx, k, v)
             else:
-                assert self.kv_cache
                 self.kv_cache.append(self.layer_idx, k, v)
                 k, v = self.kv_cache.get(self.layer_idx)
 
@@ -81,8 +82,13 @@ class Attention(nn.Module):
         score = einops.einsum(q, k_t, "b h t_q d, b h d t_k -> b h t_q t_k")
         # scaling by the size of d_head i.e. d_model / number_of_heads
         scaled_score = score / math.sqrt(self.d_head)
-        token_len = x.shape[-2]
-        scaled_score = scaled_score.masked_fill(self.causal_mask[:token_len, :token_len], float("-inf"))
+
+        if self.is_training or pos < 1:
+            """
+            Only use causal masking for training or prefill
+            """
+            token_len = q.shape[-2]
+            scaled_score = scaled_score.masked_fill(self.causal_mask[:token_len, :token_len], float("-inf"))
         weights = torch.softmax(scaled_score, dim=-1)
         """
         merging back the weights for each head
