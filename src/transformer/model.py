@@ -4,8 +4,10 @@ import einops
 import torch
 from torch import nn
 
+from transformer.attention import AttentionParams
 from transformer.embedding_table import EmbeddingTable
-from transformer.transformer import Transformer, TransformerHyperParams
+from transformer.kv_cache import KVCache, CacheParams
+from transformer.transformer import Transformer
 
 
 @dataclass
@@ -16,23 +18,36 @@ class HyperParams:
     max_seq_len: int
     d_ff: int
     num_transformer_blocks: int
+    is_training=True
 
 class Model(nn.Module):
     def __init__(self, params: HyperParams):
         super().__init__()
         self.embeddings_table = EmbeddingTable(params.d_model, params.vocab_size)
-        self.transformers = nn.ModuleList([Transformer(TransformerHyperParams(
+        kv_cache = None
+        if not params.is_training:
+            kv_cache = KVCache(params=CacheParams(
+                num_attention_layers=params.num_transformer_blocks,
+                max_seq_len=params.max_seq_len,
+                d_head=params.d_model//params.num_heads,
+                num_heads=params.num_heads,
+                dtype=torch.float32,
+                device="mps"
+            ))
+        self.transformers = nn.ModuleList([Transformer(AttentionParams(
             d_model=params.d_model,
             num_heads =params.num_heads,
             max_seq_len=params.max_seq_len,
-            d_ff=params.d_ff
-        )) for _ in range(params.num_transformer_blocks)])
+            d_ff=params.d_ff,
+            layer_idx=i,
+            kv_cache=kv_cache
+        )) for i in range(params.num_transformer_blocks)])
         self.rms_norm = nn.RMSNorm(params.d_model)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, pos: int, is_training=True) -> torch.Tensor:
         x = self.embeddings_table(x)
         for transformer in self.transformers:
-            x = transformer(x)
+            x = transformer(x, pos, is_training)
         x = self.rms_norm(x)
         logits = einops.einsum(x, self.embeddings_table.table.T, "b t d, d t_all -> b t t_all")
         return logits

@@ -1,0 +1,61 @@
+import pickle
+import sys
+
+import torch
+
+from tokenizer.tokenizer import Tokenizer
+from transformer.model import Model
+
+
+TEXT_PATH = "data/corpus/TinyStoriesV2-GPT4-train.txt"
+
+vocab_size      = 10000    # matches your tokenizer
+num_new_tokens = 100
+temperature = 0.8
+
+MODEL_PATH = "data/model/model.pt"
+
+def infer(model, tok, prompt, max_seq_len):
+    eot_id = tok.encode("<|endoftext|>")[0]
+    ids = tok.encode(prompt)                                      # list[int]
+    input_ids = torch.tensor([ids], dtype=torch.long, device="mps")  # (1, T)
+
+    with torch.no_grad():
+        for _ in range(num_new_tokens):
+            logits = model(input_ids[:, -max_seq_len:])
+            last_logits = logits[:, -1, :]
+            probs = torch.softmax(last_logits / temperature, dim=-1)
+            next_id = torch.multinomial(probs, num_samples=1)
+            if next_id.item() == eot_id:
+                break
+            # decode just this one token and print
+            token_text = tok.decode([next_id.item()])
+            print(token_text, end="", flush=True)
+            input_ids = torch.cat([input_ids, next_id], dim=1)
+    print()   # final newline
+
+if __name__ == '__main__':
+    ckpt = torch.load(MODEL_PATH)
+    if isinstance(ckpt, dict) and "state_dict" in ckpt:
+        config = ckpt["config"]
+        state_dict = ckpt["state_dict"]
+    else:
+        config = {"vocab_size": vocab_size}
+        state_dict = ckpt
+
+    model = Model(config["vocab_size"], config["d_model"], config["num_heads"],
+                  config["max_seq_len"], config["num_blocks"], config["d_ff"])
+    model.load_state_dict(state_dict)
+    model.to("mps")
+    model.eval()
+
+    with open(f"data/tokenizer/tinystories_vocab.pkl", "rb") as f:
+        vocab = pickle.load(f)
+    with open(f"data/tokenizer/tinystories_merges.pkl", "rb") as f:
+        merges = pickle.load(f)
+    tok = Tokenizer(vocab, merges, special_tokens=["<|endoftext|>"])
+
+
+    while True:
+        prompt = input("Prompt: ")
+        infer(model, tok, prompt, config["max_seq_len"])

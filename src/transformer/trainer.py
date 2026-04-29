@@ -84,7 +84,7 @@ if __name__ == '__main__':
         batch = get_batch(tokens, B=batch_size, T=seq_len, device='mps')
         inputs  = batch[:, :-1] # without the last token
         targets = batch[:, 1:] # withput the first
-        logits = model(inputs)
+        logits = model(inputs, -1)
         loss = torch.nn.functional.cross_entropy(
             logits.reshape(-1, vocab_size),
             targets.reshape(-1),
