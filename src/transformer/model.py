@@ -1,12 +1,14 @@
 from dataclasses import dataclass
+from enum import Enum
 
 import einops
 import torch
 from torch import nn
 
-from transformer.attention import AttentionParams
+from transformer.attention import AttentionParams, CacheType
 from transformer.embedding_table import EmbeddingTable
 from transformer.kv_cache import KVCache, CacheParams
+from transformer.paged_cache import Sequence
 from transformer.transformer import Transformer
 
 
@@ -19,13 +21,14 @@ class HyperParams:
     d_ff: int
     num_transformer_blocks: int
     is_training: bool
+    cache_type: CacheType = CacheType.PAGED
 
 class Model(nn.Module):
     def __init__(self, params: HyperParams):
         super().__init__()
         self.embeddings_table = EmbeddingTable(params.d_model, params.vocab_size)
         kv_cache = None
-        if not params.is_training:
+        if not params.is_training and params.cache_type == CacheType.KV:
             kv_cache = KVCache(params=CacheParams(
                 num_attention_layers=params.num_transformer_blocks,
                 max_seq_len=params.max_seq_len,
@@ -40,15 +43,16 @@ class Model(nn.Module):
             max_seq_len=params.max_seq_len,
             d_ff=params.d_ff,
             layer_idx=i,
+            is_training=params.is_training,
             kv_cache=kv_cache,
-            is_training=params.is_training
+            cache_type=params.cache_type
         )) for i in range(params.num_transformer_blocks)])
         self.rms_norm = nn.RMSNorm(params.d_model)
 
-    def forward(self, x: torch.Tensor, pos: int) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, pos: int, seq: Sequence | None = None) -> torch.Tensor:
         x = self.embeddings_table(x)
         for transformer in self.transformers:
-            x = transformer(x, pos)
+            x = transformer(x, pos, seq)
         x = self.rms_norm(x)
         logits = einops.einsum(x, self.embeddings_table.table.T, "b t d, d t_all -> b t t_all")
         return logits

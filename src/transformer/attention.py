@@ -1,13 +1,18 @@
 import math
 from dataclasses import dataclass
+from enum import Enum
 
 import einops
 import torch
 from torch import nn
 
 from transformer.kv_cache import KVCache
+from transformer.paged_cache import Sequence
 from transformer.rope import RoPE
 
+class CacheType(Enum):
+    KV = "kv"
+    PAGED = "paged"
 
 @dataclass
 class AttentionParams:
@@ -18,6 +23,7 @@ class AttentionParams:
     kv_cache: KVCache | None
     layer_idx: int
     is_training: bool
+    cache_type: CacheType
 
 class Attention(nn.Module):
     def __init__(self, params: AttentionParams):
@@ -34,6 +40,7 @@ class Attention(nn.Module):
         self.register_buffer("causal_mask", causal_mask)
         self.rope = RoPE(d_head=self.d_head, max_seq_len=params.max_seq_len)
         self.kv_cache = params.kv_cache
+        self.cache_type = params.cache_type
         self.layer_idx = params.layer_idx
 
     def rearrange_for_multi_head(self, tsr: torch.Tensor ):
@@ -53,7 +60,7 @@ class Attention(nn.Module):
         2. From 2nd token onwards: We will have KV Cache populated and would only need to generate K V 
         for last token. K, V for previous tokens will be fetched from cache.
     """
-    def forward(self, x: torch.Tensor, pos: int) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, pos: int, seq: Sequence | None = None) -> torch.Tensor:
         q = einops.einsum(x, self.q_out, "b t d_in, d_in d_out -> b t d_out")
         q = self.rope(self.rearrange_for_multi_head(q), pos)
 
@@ -67,12 +74,22 @@ class Attention(nn.Module):
             """
                 KVCache is only used during inference
             """
-            assert self.kv_cache
-            if pos < 0: # prefill stage
-                self.kv_cache.add(self.layer_idx, k, v)
+            if self.cache_type == CacheType.KV:
+                assert self.kv_cache
+                if pos < 0: # prefill stage
+                    self.kv_cache.add(self.layer_idx, k, v)
+                else:
+                    self.kv_cache.append(self.layer_idx, k, v)
+                    k, v = self.kv_cache.get(self.layer_idx)
             else:
-                self.kv_cache.append(self.layer_idx, k, v)
-                k, v = self.kv_cache.get(self.layer_idx)
+                assert seq
+                if pos < 0: # prefill stage
+                    seq.add(k.squeeze(0), v.squeeze(0), self.layer_idx)
+                else:
+                    seq.append(k.squeeze(0), v.squeeze(0), self.layer_idx)
+                    k, v = seq.get(self.layer_idx)
+                    k = k.unsqueeze(0)
+                    v = v.unsqueeze(0)
 
         k_t = einops.rearrange(k, "b h t d -> b h d t")
         """

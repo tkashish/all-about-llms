@@ -5,6 +5,8 @@ from torch import nn
 
 from transformer.attention import Attention, AttentionParams
 from transformer.multi_layer_perceptron import MLP
+from transformer.paged_cache import Sequence
+
 
 class Transformer(nn.Module):
     def __init__(self, params: AttentionParams):
@@ -14,7 +16,7 @@ class Transformer(nn.Module):
         self.rms_norm1 = nn.RMSNorm(params.d_model)
         self.rms_norm2 = nn.RMSNorm(params.d_model)
 
-    def forward(self, x: torch.Tensor, pos: int) -> torch.Tensor:
-        x = x + self.attention(self.rms_norm1(x), pos)
+    def forward(self, x: torch.Tensor, pos: int, seq: Sequence | None = None) -> torch.Tensor:
+        x = x + self.attention(self.rms_norm1(x), pos, seq)
         x = x + self.mlp(self.rms_norm2(x))
         return x

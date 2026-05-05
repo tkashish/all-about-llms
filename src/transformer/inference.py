@@ -1,10 +1,12 @@
 import pickle
 import sys
+from math import ceil
 
 import torch
 
 from tokenizer.tokenizer import Tokenizer
 from transformer.model import Model, HyperParams
+from transformer.paged_cache import BlockPool, BlockParameters, Sequence
 
 TEXT_PATH = "data/corpus/TinyStoriesV2-GPT4-train.txt"
 
@@ -14,15 +16,16 @@ temperature = 0.8
 
 MODEL_PATH = "data/model/model.pt"
 
-def infer(model, tok, prompt, max_seq_len):
+def infer(model, tok, prompt, max_seq_len, pool:BlockPool):
     eot_id = tok.encode("<|endoftext|>")[0]
     ids = tok.encode(prompt)                                      # list[int]
     input_ids = torch.tensor([ids], dtype=torch.long, device="mps")  # (1, T)
     pos = -1
 
+    seq = Sequence(block_pool=pool)
     with torch.no_grad():
         for _ in range(num_new_tokens):
-            logits = model(input_ids[:, -max_seq_len:], pos)
+            logits = model(input_ids[:, -max_seq_len:], pos, seq)
             last_logits = logits[:, -1, :]
             probs = torch.softmax(last_logits / temperature, dim=-1)
             next_id = torch.multinomial(probs, num_samples=1)
@@ -38,6 +41,7 @@ def infer(model, tok, prompt, max_seq_len):
             input_ids = next_id
             if pos == max_seq_len:
                 break
+    seq.release_blocks()
     print()   # final newline
 
 if __name__ == '__main__':
@@ -48,6 +52,18 @@ if __name__ == '__main__':
     else:
         config = {"vocab_size": vocab_size}
         state_dict = ckpt
+
+    num_concurrent_sequences = 4
+    block_size = 16
+    max_blocks = ceil(config["max_seq_len"] * num_concurrent_sequences/ block_size) + 100
+    pool = BlockPool(BlockParameters(
+        num_tokens = block_size,
+        num_layers = config["num_blocks"],
+        num_heads = config["num_heads"],
+        d_head = config["d_model"]//config["num_heads"],
+        dtype=torch.float32,
+        device="mps"
+    ), max_blocks=max_blocks)
 
     model = Model(HyperParams(
         d_model=config["d_model"],
@@ -71,4 +87,4 @@ if __name__ == '__main__':
 
     while True:
         prompt = input("Prompt: ")
-        infer(model, tok, prompt, config["max_seq_len"])
+        infer(model, tok, prompt, config["max_seq_len"], pool)
