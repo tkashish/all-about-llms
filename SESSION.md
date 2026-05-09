@@ -1,20 +1,17 @@
-# Session checkpoint — 2026-05-04 evening (Phase 2 complete, Phase 3 queued)
+# Session checkpoint — 2026-05-06 evening (Phase 3 kickoff — GPU foundations)
 
 Load with: `please load /Users/katayal/Documents/llm/AllAboutLLMs/SESSION.md`
 
 ## State
 
 - Repo: `/Users/katayal/Documents/llm/AllAboutLLMs`, branch `main`,
-  remote `github.com/tkashish/all-about-llms`.
-- **Three unpushed commits** on local main (Phase 1 wiki, Phase 2
-  code, Phase 2 benchmark results). `git -P log --oneline -3` to
-  see them; push when ready.
-- Phase 2 of the vLLM learning plan: **done**. Paged cache produces
-  byte-identical outputs to both the no-cache reference and the old
-  KVCache implementation. 3-way correctness test passes.
-- 7 wiki notes under `wiki/gpu/vllm/` covering motivation through
-  Phase 2 benchmark results.
-- Phase 3 kickoff is blocked on GPU provisioning (see below).
+  remote `github.com/tkashish/all-about-llms`. **All Phase 2 commits
+  are on origin.**
+- Phase 2 (paged cache + 3-way correctness test) complete and
+  committed, see prior SESSION history if needed.
+- Phase 3 kickoff: GPU provisioned, environment verified, and a full
+  GPU mental-model session done. No kernel code yet. Paused right
+  before "memory coalescing" — the first efficient-kernel principle.
 
 ## User
 
@@ -25,179 +22,166 @@ Load with: `please load /Users/katayal/Documents/llm/AllAboutLLMs/SESSION.md`
   before check-in, concrete numbers over abstract math. User writes
   the code; Kiro explains / reviews / debugs.
 
-## What got done 2026-05-04
+## What got done 2026-05-06
 
-**Phase 2 — replaced the Level 5 KV cache with a paged cache in
-pure PyTorch.** Kept both implementations alive behind a `CacheType`
-enum for A/B testing. Proved 3-way byte-identical correctness
-(no-cache == KVCache == paged). Measured ~10% median overhead of
-paged vs KVCache on a 60-token workload; overhead is isolated to
-the Python loop + `torch.cat` in `Sequence.get()` — exactly what
-Phase 3's Triton kernel will replace.
+Phase 3 kickoff — GPU foundations and execution-model mental model.
+Zero kernel code written yet. Today was about building intuition
+*before* any Triton syntax, so efficiency reasoning becomes natural.
 
-**Files created/modified:**
+### Infra provisioned (AWS)
 
-- `src/transformer/paged_cache.py` — `Block`, `BlockPool`,
-  `Sequence`. Per-layer token counters (`token_per_layer` dict) so
-  each layer's `get()` returns exactly the slots that layer has
-  appended, no cross-layer ordering dependency.
-- `src/transformer/attention.py` — added `CacheType` enum (KV or
-  PAGED). Attention branches on `cache_type` and either talks to
-  `self.kv_cache` or the `seq: Sequence` arg. Squeeze/unsqueeze at
-  the Sequence boundary to bridge `(B, H, T, D)` ↔ `(H, T, D)`.
-- `src/transformer/model.py` — `HyperParams.cache_type` with
-  `PAGED` default. `Model.__init__` builds a KVCache only when
-  `cache_type == KV`.
-- `src/transformer/transformer.py`, `inference.py`,
-  `benchmark_inference.py` — thread `seq: Sequence | None = None`
-  through `forward()`; 3-way benchmark in main().
-- `wiki/gpu/vllm/06-paged-cache-impl.md` — Phase 2 implementation
-  notes: design, the subtle off-by-one bug and why per-layer
-  counters fix it, 3-way correctness methodology, measured
-  overhead, gotchas, Phase 3 unlocks.
-- `wiki/gpu/vllm/07-benchmark-results.md` — benchmark numbers,
-  variance table, and takeaways.
-- `wiki/gpu/vllm/05-sharing-and-cow.md` — updated closing to link
-  forward to 06 instead of the learning plan.
-
-## Key findings locked in
-
-**The off-by-one bug.** Naive impl tried to update a single
-`tokens_used` counter on the last layer's write. But each decode
-step processes layers in order: each layer writes then reads. Layer
-0's read happens **before** layer N-1's write, so layer 0 sees
-stale `tokens_used` from the previous step. Symptom: paged step N
-outputs match no-cache step N-1. Fix: per-layer counter dict.
-
-**Overhead measurement.** Paged ~10% slower than KVCache on a
-60-token workload. Overhead is the Python loop + `torch.cat` in
-`Sequence.get()`. Will grow with longer sequences; exactly the
-workload the Phase 3 Triton kernel will target.
-
-**Shape boundary.** Attention: `(B, H, T, D)`. Sequence:
-`(H, T, D)` — a Sequence represents one sequence, no batch dim.
-Squeeze/unsqueeze at the three call sites in `Attention.forward()`
-bridge the two.
-
-## Phase 3 kickoff — prep done, provisioning pending
-
-**Instance plan (picked tonight, not launched):**
-
-- **Type:** `g5.2xlarge` (1× A10G 24GB, ~$1.20/hr). Revised down
-  from g5.12xlarge — only 1 GPU needed for Phase 3, and g5.12xlarge
-  hit "Insufficient capacity" in the target AZ anyway.
+- **Instance:** `g6.xlarge` (1× NVIDIA L4 24GB, ~$0.80/hr).
+  Revised down from g5.2xlarge (A10G) — L4 has lower memory
+  bandwidth but same VRAM, same Triton support, 33% cheaper.
+- **Instance ID:** `i-0c8cf119364f6acec` (us-east-1).
 - **AMI:** Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.10
-  (Amazon Linux 2023), x86 — `ami-01a5fd1331e9628eb`. Ships with
-  PyTorch 2.10, CUDA/cuDNN, NVIDIA drivers, Triton, SSM agent.
-- **Storage:** 100 GiB gp3 encrypted root. Optionally mount the
-  ~3.8 TB ephemeral NVMe instance store at `/mnt/nvme` for scratch.
-- **Key pair:** none. Connect via SSM Session Manager.
-- **IAM role:** `InstanceRole` (created tonight) with
-  `AmazonSSMManagedInstanceCore` + `CloudWatchAgentServerPolicy`.
-- **Security group:** no inbound rules needed (SSM only).
-- **Shutdown behavior:** Stop (not Terminate).
+  (Amazon Linux 2023), x86 — `ami-0b246ca76fc968679`.
+- **Storage:** 100 GiB gp3 root.
+- **IAM role:** `InstanceRole` (with `AmazonSSMManagedInstanceCore`
+  + `CloudWatchAgentServerPolicy`).
+- **No key pair; no inbound SG rules.** Access via SSM only.
 
-**Provisioning decision:** an Amazon internal security warning
-flagged creating an AWS-managed (non-Midway-signed) SSH key pair
-as a HIGH risk. We're using SSM Session Manager instead — no SSH
-keys at all.
+### Connect + environment verified
 
-**Launch attempt today failed** with "Insufficient capacity" on
-g5.12xlarge. Plan for tomorrow: use g5.2xlarge; if that also fails,
-try a different AZ or the `us-west-2` / `us-east-2` regions.
+```bash
+# From Mac
+aws ssm start-session --target i-0c8cf119364f6acec --region us-east-1
 
-## Day-1 Phase 3 checklist (tomorrow morning)
+# Inside the instance
+sudo su - ec2-user
+source activate pytorch               # activates the DL AMI env
+nvidia-smi                            # shows 1× L4 24GB
 
-1. Launch the instance per the plan above.
-2. Connect: `aws ssm start-session --target i-<instance-id>`.
-3. Sanity-check: `sudo su - ec2-user`, then
-   `nvidia-smi` (should show 1× A10G), then
-   `python -c "import torch, triton; print(torch.cuda.is_available(), triton.__version__)"`.
-4. Clone the repo: `git clone https://github.com/tkashish/all-about-llms.git`, `cd all-about-llms`, `uv sync`.
-5. Begin Phase 3 Objective 1 — trivial Triton vector-add kernel to
-   get feel for `@triton.jit`, `tl.load`, `tl.store`, `pid`, masks.
-6. Rebuild the 3-way benchmark on the new hardware as baseline
-   before touching the kernel.
+# Project setup
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+cd ~
+git clone https://github.com/tkashish/all-about-llms.git
+cd all-about-llms
+uv sync
 
-## Phase 3 roadmap (from `wiki/gpu/vllm-learning-plan.md`)
+# Verify GPU access through uv env
+uv run python -c "import torch, triton; print(torch.cuda.is_available(), triton.__version__)"
+# → True 3.6.0
+```
 
-**Half 1 — Triton kernel (make it fast):**
+### Conceptual material covered
 
-1. Learn Triton basics with a vector-add kernel.
-2. Write a PagedAttention decode kernel reading K/V straight from
-   `BlockPool.blocks` using the block table as an index. Replaces
-   `Sequence.get()` entirely.
-3. Benchmark Triton paged vs pure-Py paged vs KVCache. Expect
-   Triton ≈ KV.
+Walked through two separate mental models, each with its own
+hierarchy:
 
-**Half 2 — Scheduler (make it useful):**
+**Model A — Hardware (physical, static):**
+- GPU has many SMs (60 on L4, 132 on H100).
+- Each SM has 128 CUDA cores + 4 Tensor cores + registers (~64 KB)
+  + SRAM (~128 KB).
+- Memory hierarchy: HBM (24 GB, ~300 GB/s on L4) → L2 cache (~48 MB,
+  hardware-managed) → SRAM (per-SM, manually-managed) → registers.
+- CUDA cores = general math (softmax, elementwise). Tensor cores =
+  matmul specialists (fp16/bf16/int8/fp8).
+- "CUDA" is overloaded: the *platform* (language + runtime) vs
+  *CUDA cores* (hardware units inside an SM).
 
-4. Minimal request queue with prefill + decode phases, continuous
-   batching across multiple concurrent sequences.
-5. Simulate many concurrent requests with varying lengths. Measure
-   aggregate throughput, watch it climb toward the compute-ridge
-   ceiling.
+**Model B — Execution (logical, per-kernel):**
+- Kernel launch: grid of blocks, block of threads. Programmer picks
+  grid size and block size; everything else is automatic.
+- Three levels of scheduling, all hardware:
+  1. Blocks → SMs (global scheduler, dynamic).
+  2. Threads → warps of 32 (automatic).
+  3. Warps → cores per cycle (SM's 4 warp schedulers).
+- One block stays on its SM for its lifetime (threads share SRAM,
+  can't migrate).
+- A warp's 32 threads use 32 CUDA cores simultaneously. 4 warps ×
+  32 = 128 cores busy per SM per cycle.
+- Scheduler hides memory latency by swapping stalled warps for
+  active ones — so you want many resident warps per SM.
 
-**Deliverables:**
+### Wiki changes (uncommitted on Mac)
 
-- `src/inference/paged_attention_kernel.py`
-- `src/inference/scheduler.py`
-- `src/inference/server.py` (stdin-driven request driver)
-- `wiki/gpu/vllm/08-triton-kernel.md`
-- `wiki/gpu/vllm/09-scheduler.md`
-- `wiki/gpu/vllm/10-final-benchmarks.md`
+- `wiki/gpu/02-hardware-anatomy.md` — added:
+  - **"Why GPUs exist (for ML)"** — CPU vs GPU framing.
+  - **'"CUDA" is overloaded — SM vs CUDA cores'** — naming
+    disambiguation + hierarchy diagram + L4/H100 core counts.
+  - **"Two kinds of cores inside an SM"** — CUDA vs Tensor cores,
+    with pizza-oven analogy.
+  - **"L4 at a glance"** — consolidated hardware picture specific
+    to the instance we're using.
+- `wiki/gpu/06-execution-model.md` — **NEW**. Full execution model
+  top-to-bottom with grid/block/warp/thread diagram, three
+  scheduling levels table, what-the-programmer-controls table,
+  and two common underutilization patterns.
+- `wiki/gpu/vllm-learning-plan.md` — updated Phase 3 objectives:
+  - New Obj 1: GPU mental model.
+  - New Obj 2: Efficient-kernel principles (coalescing,
+    occupancy, tiling, divergence, register pressure).
+  - Reframed existing Triton/kernel/benchmark/scheduler objectives.
+  - Added `wiki/gpu/07-efficient-kernels.md` to deliverables.
 
-## Phase 4+ wishlist (from user, not yet scoped)
+## Where we paused
 
-User wants to eventually cover:
+End-of-GPU-foundations, right before starting efficient-kernel
+principles. User asked for the efficient-kernels arc in this order:
+coalescing > occupancy > (tiling later, with the paged kernel).
 
-- **FlashAttention** — Triton kernel for prefill that avoids
-  materializing the T×T attention matrix (tiling + online softmax
-  + stay-in-SRAM). Natural extension of Phase 3's Triton work —
-  the primitives are identical. Recommended first Phase 4 topic.
-- **Prefix caching / CoW** — extends Phase 2 code; small / high
-  learning density. Good second.
-- **Speculative decoding** — clever algorithmic idea; builds on the
-  base model, doesn't need new serving infra.
-- **OpenAI-compatible HTTP server** — wrap scheduler in FastAPI with
-  OpenAI chat/completions schema. Mostly engineering.
-- **Quantization (fp8, int4, AWQ, GPTQ)** — huge topic on its own,
-  deserves its own multi-phase plan.
-- **Multi-GPU tensor parallelism** — NCCL, collectives, comms
-  patterns. Requires multi-GPU instance.
-- **More model architectures** — mostly boilerplate.
-- **Production details** — catch-all; best learned by reading real
-  vLLM source with reimplementation as context.
+**Next concept to cover on resume: memory coalescing.** Why threads
+in a warp should access contiguous memory, what happens when they
+don't (multiple memory transactions instead of one), and how to
+structure thread-to-data mapping to coalesce by default. Belongs in
+the planned `wiki/gpu/07-efficient-kernels.md` note (not yet
+created).
 
-Formalize a Phase 4 plan only once Phase 3 ships.
+After that: **occupancy + latency hiding**, then **vector-add
+kernel in Triton** to make the mental model concrete. Then start
+on the paged attention kernel.
 
-## Dangling threads
+## Day-2 checklist (tomorrow)
 
-1. **Three unpushed commits.** Local main is ahead of origin/main
-   by 3 commits. Push when comfortable.
-2. **Chunked prefill** — noted in continuous-batching doc, not yet
-   explored.
-3. **`Sequence.release_blocks()`** exists but is not hooked into
-   request lifecycle anywhere. Will matter once a scheduler is
-   preempting sequences.
-4. **Warmup pollution** — `benchmark_inference.py` handles this for
-   paged by rebuilding `Sequence` between warmup and real runs.
-   The KVCache path handles it by rebuilding the whole model,
-   which is wasteful; could add a reset method.
-5. **`generate_with_kv_cache` and `generate_with_paged_cache`** are
-   nearly identical. Good refactoring candidate once a common cache
+1. Reconnect: `aws ssm start-session --target i-0c8cf119364f6acec
+   --region us-east-1`.
+2. If instance was stopped, start it first: `aws ec2
+   start-instances --instance-ids i-0c8cf119364f6acec`.
+3. `source activate pytorch && cd ~/all-about-llms && git pull`.
+4. Resume with "memory coalescing" concept.
+
+## Running-cost note
+
+The instance costs **$0.80/hr on-demand**. If left running, that's
+~$19/day. Stop when not in use:
+
+```bash
+aws ec2 stop-instances --instance-ids i-0c8cf119364f6acec --region us-east-1
+```
+
+EBS persists; uv env + cloned repo survive a stop/start. Only the
+ephemeral instance-store (if used) would be wiped.
+
+## Dangling threads (carried over)
+
+1. **Uncommitted wiki changes** on Mac — 3 files modified / 1 new.
+   Not committed tonight; review and commit tomorrow before doing
+   more wiki work.
+2. **Chunked prefill** — noted in continuous-batching doc.
+3. **`Sequence.release_blocks()`** not wired into request lifecycle.
+4. **Warmup pollution** handling in `benchmark_inference.py` is ad
+   hoc for the paged path; could be generalized once a common cache
    interface exists.
-6. **Excalidraw line-height quirk** — from 2026-05-01 session,
-   still open, not blocking.
-7. **Earlier dangling threads** (RoPE impl notes, pytorch wiki
+5. **Excalidraw line-height quirk** — from 2026-05-01 session.
+6. **Earlier dangling threads** (RoPE impl notes, pytorch wiki
    holes, SwiGLU walkthrough, train a bigger model) — still open.
-8. **Single-sequence benchmark understates paged's benefits.** A
-   multi-sequence memory-utilization comparison was discussed but
-   deferred — the payoff shows up in Phase 3 scheduler work anyway.
+7. **Single-sequence benchmark understates paged's benefits.** The
+   multi-sequence comparison naturally happens as part of Phase 3
+   Objective 7 (aggregate throughput).
+
+## Phase 4+ wishlist (reminder, scope after Phase 3 ships)
+
+- **FlashAttention** — Triton kernel for prefill, natural extension
+  of Phase 3. Recommended first Phase 4 topic.
+- Prefix caching / CoW, speculative decoding, OpenAI HTTP server,
+  quantization, multi-GPU tensor parallelism, more model
+  architectures, production details.
 
 ## Resume prompt
 
-> "Load /Users/katayal/Documents/llm/AllAboutLLMs/SESSION.md.
->  The g5.2xlarge instance should be up — help me through Phase 3
->  Day 1 (Triton vector-add to warm up, then start on the paged
->  attention kernel)."
+> "Load /Users/katayal/Documents/llm/AllAboutLLMs/SESSION.md. The
+>  g6.xlarge should be stopped — start it, reconnect via SSM, and
+>  pick up where we left off: memory coalescing (first efficient-
+>  kernel principle)."
